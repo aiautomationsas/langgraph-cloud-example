@@ -5,48 +5,60 @@ from my_agent.utils.nodes import call_model, should_continue, tool_node
 from my_agent.utils.state import AgentState
 
 
-# Define the config
+# Define the config - solo Groq
 class GraphConfig(TypedDict):
-    model_name: Literal["anthropic", "openai"]
+    model_name: Literal["groq"]
 
 
-# Define a new graph
+# Función para inicializar el estado del agente con memoria
+def inicializar_estado(state):
+    """Inicializa el estado del agente con estructuras de memoria vacías"""
+    if "memoria_cumplimiento" not in state:
+        state["memoria_cumplimiento"] = {}
+    if "contexto_investigacion" not in state:
+        state["contexto_investigacion"] = {
+            "casos_activos": [],
+            "entidades_en_revision": []
+        }
+    if "entidades_verificadas" not in state:
+        state["entidades_verificadas"] = {}
+    
+    return state
+
+# Define a new graph para el Agente ReAct de Oficial de Cumplimiento
 workflow = StateGraph(AgentState, config_schema=GraphConfig)
 
-# Define the two nodes we will cycle between
-workflow.add_node("agent", call_model)
-workflow.add_node("action", tool_node)
+# Agregar nodo de inicialización
+workflow.add_node("inicializar", inicializar_estado)
 
-# Set the entrypoint as `agent`
-# This means that this node is the first one called
-workflow.set_entry_point("agent")
+# Define los nodos principales del ciclo ReAct
+workflow.add_node("agent", call_model)  # Nodo de razonamiento
+workflow.add_node("action", tool_node)  # Nodo de acción (herramientas)
 
-# We now add a conditional edge
+# Set the entrypoint como inicialización
+workflow.set_entry_point("inicializar")
+
+# Conectar inicialización con el agente
+workflow.add_edge("inicializar", "agent")
+
+# Agregar conditional edges para el ciclo ReAct
 workflow.add_conditional_edges(
-    # First, we define the start node. We use `agent`.
-    # This means these are the edges taken after the `agent` node is called.
+    # Comenzamos desde el nodo 'agent' (razonamiento)
     "agent",
-    # Next, we pass in the function that will determine which node is called next.
+    # Función que determina si continuar con herramientas o terminar
     should_continue,
-    # Finally we pass in a mapping.
-    # The keys are strings, and the values are other nodes.
-    # END is a special node marking that the graph should finish.
-    # What will happen is we will call `should_continue`, and then the output of that
-    # will be matched against the keys in this mapping.
-    # Based on which one it matches, that node will then be called.
+    # Mapeo de decisiones:
     {
-        # If `tools`, then we call the tool node.
+        # Si necesita usar herramientas, va al nodo de acción
         "continue": "action",
-        # Otherwise we finish.
+        # Si no necesita herramientas, termina
         "end": END,
     },
 )
 
-# We now add a normal edge from `tools` to `agent`.
-# This means that after `tools` is called, `agent` node is called next.
+# Después de usar herramientas, regresa al agente para razonar sobre los resultados
 workflow.add_edge("action", "agent")
 
-# Finally, we compile it!
-# This compiles it into a LangChain Runnable,
-# meaning you can use it as you would any other runnable
+# Compilar el grafo del Agente ReAct de Oficial de Cumplimiento
+# Este agente implementa el patrón ReAct: Reasoning, Acting, Observing
 graph = workflow.compile()
